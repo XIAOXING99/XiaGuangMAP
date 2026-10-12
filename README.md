@@ -4,9 +4,8 @@
 
 ## 发布
 
-- 托管：Cloudflare Pages
+- 托管：GitHub Pages
 - 发布分支：`main`
-- 构建命令：留空
-- 输出目录：`dist`
+- 网站目录：`dist`
 
-`main` 分支更新后，Cloudflare Pages 会自动发布最新版本。
+`main` 分支更新后，GitHub Actions 会自动发布最新版本。
