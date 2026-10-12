@@ -1,0 +1,465 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#061126">
+  <meta name="description" content="查看全球城市朝霞晚霞概率、最佳时间和观赏方向。">
+  <title>霞光地图</title>
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23061126'/%3E%3Cpath d='M9 41h46' stroke='%23fff' stroke-width='4' stroke-linecap='round'/%3E%3Cpath d='M18 40a14 14 0 0 1 28 0' fill='%23ff765d'/%3E%3Cpath d='M14 48h36' stroke='%239d54ff' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #f7f9ff;
+      --muted: #c3cee0;
+      --line: rgba(201, 219, 246, .24);
+      --orange: #ff8c4b;
+      --pink: #ff4f9a;
+      --glass-edge: rgba(255,255,255,.31);
+      --glass-fill: rgba(28,60,100,.52);
+      --glass-shadow: rgba(0,0,0,.28);
+      font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: #0a1b31; color: var(--ink); }
+    body { min-height: 100dvh; overflow-x: hidden; }
+    button, input { font: inherit; }
+    button { color: inherit; }
+    button:focus-visible, input:focus-visible { outline: 2px solid #b7ddff; outline-offset: 2px; }
+    .page {
+      min-height: 100dvh;
+      display: grid;
+      place-items: start center;
+      background: radial-gradient(circle at 50% 12%, rgba(65, 134, 214, .38), transparent 34%), radial-gradient(circle at 50% 82%, rgba(234, 74, 91, .16), transparent 35%), #0a1b31;
+    }
+    .map-shell {
+      position: relative;
+      width: min(100vw, 76.4dvh, 760px);
+      aspect-ratio: 1100 / 1440;
+      min-width: 320px;
+      overflow: hidden;
+      isolation: isolate;
+      background: #0d223a;
+      box-shadow: 0 0 110px rgba(31, 103, 184, .24);
+    }
+    .map-shell::after { content: ""; position: absolute; inset: 0; z-index: 2; pointer-events: none; background: radial-gradient(circle at 50% -8%, rgba(91,157,220,.16), transparent 36%), linear-gradient(180deg, rgba(3, 12, 27, .12) 0%, transparent 20%, transparent 74%, rgba(3, 12, 27, .24) 100%); }
+    .map-layer { position: absolute; inset: 0; z-index: 1; background: radial-gradient(circle at 50% 42%, #1c486e 0%, #103251 48%, #0a2037 100%); }
+    .world-map { position: absolute; inset: 0; background: transparent; }
+    .world-map .leaflet-tile-pane { opacity: 0; filter: brightness(.86) saturate(.68) contrast(1.02); transition: opacity .24s ease; }
+    .world-map.tiles-ready .leaflet-tile-pane { opacity: 1; }
+    .china-glow-layer { pointer-events: none; opacity: 0; transition: opacity .34s ease; }
+    .world-map.china-rendering .china-glow-layer { opacity: 1; }
+    .world-map .leaflet-control-attribution { margin: 0 6px 104px 0 !important; padding: 3px 6px; border-radius: 7px; background: rgba(4,13,29,.72); color: #bac7da; font-size: 9px; backdrop-filter: blur(8px); }
+    .world-map .leaflet-control-attribution a { color: #d6e3f5; }
+    .world-map .leaflet-marker-pane, .world-map .leaflet-overlay-pane { z-index: 500; }
+    .map-status { position: absolute; z-index: 4; left: 50%; top: 50%; transform: translate(-50%,-50%); padding: 8px 12px; border: 1px solid rgba(190,210,241,.2); border-radius: 999px; background: rgba(4,14,32,.82); color: #c5d1e4; font-size: .72rem; pointer-events: none; transition: opacity .2s ease; }
+    .map-status.hidden { opacity: 0; }
+    .map-city-icon { width: 1px !important; height: 1px !important; border: 0 !important; background: none !important; }
+    .map-city-marker { position: absolute; left: 0; top: 0; transform: translate(-50%,-50%); display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+    .map-city-dot { flex: 0 0 auto; width: var(--dot-size); height: var(--dot-size); border: 2px solid rgba(255,255,255,.9); border-radius: 50%; background: var(--dot); box-shadow: 0 0 0 5px color-mix(in srgb,var(--dot) 20%,transparent), 0 0 18px var(--dot); }
+    .map-city-label { display: none; padding: 5px 8px; border: 1px solid rgba(255,255,255,.16); border-radius: 10px; background: rgba(5,14,31,.88); color: white; box-shadow: 0 7px 18px rgba(0,0,0,.34); font-size: .68rem; font-weight: 800; backdrop-filter: blur(8px); }
+    .map-city-marker.active .map-city-label, .map-city-marker.label-visible .map-city-label, .map-city-marker:hover .map-city-label { display: block; }
+    .topbar { position: absolute; z-index: 10; top: max(16px, env(safe-area-inset-top)); left: 5%; right: 5%; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 11px; }
+    .brand { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+    .brand h1 { margin: 0; font-size: clamp(1.1rem, 4.6vw, 1.7rem); letter-spacing: -.045em; text-shadow: 0 2px 14px rgba(0,0,0,.52); }
+    .demo-badge { padding: 3px 6px; border: 1px solid rgba(255,255,255,.26); border-radius: 999px; color: #c8d5ec; background: rgba(4,12,27,.5); font-size: .58rem; }
+    .search-trigger { min-width: 0; height: clamp(38px, 8.8vw, 48px); padding: 0 14px; border: 1px solid rgba(184, 204, 239, .28); border-radius: 999px; background: rgba(13, 28, 57, .77); box-shadow: inset 0 1px rgba(255,255,255,.05); color: #9facbf; display: flex; align-items: center; gap: 9px; cursor: pointer; backdrop-filter: blur(16px); }
+    .search-trigger span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .round-button { width: clamp(38px, 8.8vw, 48px); height: clamp(38px, 8.8vw, 48px); padding: 0; border: 1px solid rgba(184, 204, 239, .28); border-radius: 50%; background: rgba(9, 21, 45, .82); display: grid; place-items: center; cursor: pointer; backdrop-filter: blur(16px); }
+    .tabs { position: absolute; z-index: 10; top: clamp(66px, 13.5%, 112px); left: 5%; right: 5%; height: clamp(44px, 9.4vw, 56px); display: grid; grid-template-columns: repeat(3,1fr); padding: 4px; border: 1px solid rgba(178, 199, 234, .22); border-radius: 17px; background: rgba(4, 14, 33, .78); box-shadow: 0 12px 35px rgba(0,0,0,.25); backdrop-filter: blur(19px); }
+    .tab { border: 0; border-radius: 13px; background: transparent; color: #c0c9db; cursor: pointer; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 7px; transition: .2s ease; }
+    .tab svg { width: 20px; height: 20px; }
+    .tab.active { color: white; background: linear-gradient(115deg, #ff9b61, #f25871 58%, #d92e5c); box-shadow: inset 0 1px rgba(255,255,255,.38), 0 8px 22px rgba(217, 46, 92, .28); }
+    .layer-chip { position: absolute; z-index: 11; top: clamp(120px, 21%, 176px); right: 4%; display: flex; align-items: center; gap: 6px; padding: 8px 10px; border: 1px solid rgba(190,210,241,.25); border-radius: 999px; background: rgba(5,15,34,.82); color: #c8d3e5; cursor: pointer; font-size: .68rem; font-weight: 750; backdrop-filter: blur(16px); }
+    .layer-chip.active { border-color: rgba(137,197,255,.55); background: rgba(29,70,111,.86); color: #fff; }
+    .layer-chip small { color: #ffcab1; font-size: .58rem; }
+    .map-controls { position: absolute; z-index: 11; right: 3.8%; bottom: 20%; display: grid; gap: 9px; }
+    .control-stack { border: 1px solid rgba(190, 210, 241, .24); border-radius: 14px; overflow: hidden; background: rgba(5, 15, 34, .82); backdrop-filter: blur(16px); }
+    .control-stack button, .locate { width: clamp(38px, 9vw, 48px); height: clamp(38px, 9vw, 48px); border: 0; background: transparent; display: grid; place-items: center; cursor: pointer; font-size: 1.3rem; }
+    .control-stack button + button { border-top: 1px solid var(--line); }
+    .locate { border: 1px solid rgba(190, 210, 241, .24); border-radius: 14px; background: rgba(5, 15, 34, .82); backdrop-filter: blur(16px); }
+    .legend { position: absolute; z-index: 10; left: 4%; bottom: 16.5%; width: 48%; max-width: 300px; padding: 9px 11px; border: 1px solid rgba(184, 204, 239, .2); border-radius: 13px; background: rgba(6, 15, 35, .78); backdrop-filter: blur(15px); }
+    .legend-title { display: flex; justify-content: space-between; margin-bottom: 7px; color: #c9d4e7; font-size: .68rem; font-weight: 700; }
+    .legend-title span:last-child { color: #ffb09b; }
+    .legend-bar { height: 7px; border-radius: 999px; background: linear-gradient(90deg, #34445e 0 11%, #d9b7ac 22%, #ffc1ae 33%, #ffa68e 44%, #ff8668 56%, #ff624f 67%, #e33449 78%, #c20b3c 89%, #9f0036 100%); }
+    .legend-labels { display: flex; justify-content: space-between; margin-top: 6px; color: #aab8d0; font-size: clamp(.56rem, 1.7vw, .68rem); }
+    .timeline { position: absolute; z-index: 12; left: 3.5%; right: 3.5%; bottom: 2.2%; padding: 12px 13px 10px; border: 1px solid rgba(184, 204, 239, .25); border-radius: 17px; background: rgba(7, 17, 39, .86); box-shadow: 0 14px 34px rgba(0,0,0,.32); backdrop-filter: blur(18px); }
+    .timeline-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 14px; }
+    .range-wrap { min-width: 0; }
+    .time-value { display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px; font-size: clamp(.64rem, 2.2vw, .78rem); }
+    .time-value span:first-child { color: #c6d1e5; font-weight: 700; }
+    .time-value span:last-child { color: #ffd0b5; }
+    input[type="range"] { width: 100%; accent-color: #fff; cursor: pointer; }
+    .time-labels { display: flex; justify-content: space-between; color: #8594b2; font-size: clamp(.52rem, 1.9vw, .66rem); }
+    .play { width: clamp(38px, 9vw, 50px); height: clamp(38px, 9vw, 50px); border: 1px solid rgba(190, 210, 241, .28); border-radius: 50%; background: rgba(29, 43, 72, .88); display: grid; place-items: center; cursor: pointer; font-size: 1rem; }
+    .shade, .search-shade { position: fixed; inset: 0; z-index: 100; display: none; }
+    .shade { overflow: hidden; background: #061126; }
+    .search-shade { background: rgba(1, 5, 13, .68); backdrop-filter: blur(9px); }
+    .shade.open { display: block; }
+    .search-shade.open { display: grid; place-items: start center; padding: 11vh 16px 16px; }
+    .city-scene { position: absolute; top: 0; left: 50%; width: 100vw; max-width: 720px; height: 36dvh; transform: translateX(-50%); overflow: hidden; background: #071225; }
+    .city-scene::after { content: ""; position: absolute; z-index: 2; inset: 0; pointer-events: none; background: linear-gradient(180deg, rgba(2,8,20,.05) 0%, transparent 37%, rgba(2,8,20,.44) 68%, #061126 100%); }
+    .city-scene-photo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center 40%; filter: saturate(1.04) contrast(1.02); transition: opacity .28s ease, filter .28s ease; }
+    .city-scene-photo.loading { opacity: .36; filter: blur(12px) saturate(.8); }
+    .scene-caption { position: absolute; z-index: 3; top: max(16px, env(safe-area-inset-top)); left: 18px; display: flex; align-items: center; gap: 8px; padding: 9px 12px; border: 1px solid rgba(255,255,255,.23); border-radius: 13px; background: rgba(5,14,29,.64); box-shadow: 0 8px 25px rgba(0,0,0,.26); backdrop-filter: blur(14px); }
+    .scene-caption strong { font-size: .88rem; }
+    .scene-caption span { color: #e9cfc7; font-size: .68rem; }
+    .scene-status { position: absolute; z-index: 3; top: max(17px, env(safe-area-inset-top)); right: 18px; padding: 8px 10px; border: 1px solid rgba(255,255,255,.2); border-radius: 10px; background: rgba(5,14,29,.62); color: #f1ddda; font-size: .68rem; backdrop-filter: blur(12px); }
+    .sheet { position: absolute; z-index: 4; left: 50%; bottom: 0; transform: translateX(-50%); width: 100vw; max-width: 720px; height: clamp(58dvh, 72dvh, 760px); overflow-x: hidden; overflow-y: auto; padding: 10px 20px max(24px, env(safe-area-inset-bottom)); border: 1px solid rgba(190, 210, 241, .23); border-bottom: 0; border-radius: 28px 28px 0 0; background: #08142b; box-shadow: 0 -24px 80px rgba(0,0,0,.45); transition: height .26s ease; }
+    .sheet.expanded { height: calc(100dvh - max(58px, env(safe-area-inset-top))); }
+    .sheet-grabber { display: block; width: 54px; height: 18px; margin: -3px auto 5px; padding: 0; border: 0; background: transparent; cursor: ns-resize; }
+    .sheet-grabber::after { content: ""; display: block; width: 48px; height: 5px; margin: auto; border-radius: 99px; background: #526483; }
+    .sheet-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; min-width: 0; }
+    .sheet-head > div { min-width: 0; }
+    .eyebrow { margin: 0 0 5px; color: var(--muted); font-size: .78rem; }
+    .sheet h2 { margin: 0; font-size: 1.45rem; }
+    .close { flex: 0 0 auto; width: 40px; height: 40px; border: 1px solid var(--line); border-radius: 50%; background: rgba(255,255,255,.04); cursor: pointer; }
+    .weather-card { margin: 17px 0 14px; padding: 14px; border: 1px solid rgba(138,190,239,.2); border-radius: 18px; background: linear-gradient(135deg,rgba(40,83,139,.22),rgba(255,255,255,.025)); }
+    .weather-main { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    .weather-primary { display: flex; align-items: center; gap: 11px; min-width: 0; }
+    .weather-icon { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 14px; background: rgba(255,255,255,.07); font-size: 1.55rem; }
+    .weather-copy { display: grid; gap: 3px; }
+    .weather-copy strong { font-size: 1rem; }
+    .weather-copy span { color: var(--muted); font-size: .76rem; }
+    .weather-temp { font-size: 2.45rem; line-height: 1; font-weight: 820; letter-spacing: -.06em; }
+    .weather-stats { display: flex; gap: 16px; margin-top: 11px; padding-top: 10px; border-top: 1px solid rgba(190,210,241,.12); color: var(--muted); font-size: .75rem; }
+    .weather-stats b { margin-left: 4px; color: #e9effa; }
+    .section-label { margin: 0 0 9px; color: #dbe5f5; font-size: .88rem; font-weight: 800; }
+    .glow-cards { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 9px; }
+    .glow-card { min-width: 0; padding: 13px; border: 1px solid rgba(190,210,241,.14); border-radius: 17px; background: rgba(255,255,255,.025); }
+    .glow-card.sunrise { background: linear-gradient(145deg,rgba(255,177,101,.11),rgba(255,255,255,.025)); }
+    .glow-card.sunset { background: linear-gradient(145deg,rgba(231,55,101,.12),rgba(255,255,255,.025)); }
+    .glow-card-head { display: flex; justify-content: space-between; align-items: center; gap: 7px; }
+    .glow-card-head strong { font-size: .85rem; }
+    .level-chip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 4px 7px; border: 1px solid rgba(255,140,110,.35); border-radius: 999px; font-size: .66rem; font-weight: 800; }
+    .glow-probability { display: flex; align-items: flex-end; gap: 7px; margin: 14px 0 12px; }
+    .glow-probability strong { font-size: 2.2rem; line-height: .86; letter-spacing: -.06em; }
+    .glow-probability span { color: var(--muted); font-size: .7rem; }
+    .glow-time { display: grid; gap: 3px; padding-top: 10px; border-top: 1px solid rgba(190,210,241,.1); }
+    .glow-time span { color: var(--muted); font-size: .66rem; }
+    .glow-time b { font-size: .78rem; }
+    .intensity-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 7px; margin: 0 0 11px; color: var(--muted); font-size: .67rem; }
+    .intensity-track { height: 5px; overflow: hidden; border-radius: 99px; background: rgba(255,255,255,.09); }
+    .intensity-track i { display: block; width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg,#56657a,#ffa68e,#e33449,#9f0036); transition: width .25s ease; }
+    .intensity-row b { color: #eaf0f9; font-size: .7rem; }
+    .data-strip { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)) auto; align-items: center; gap: 7px; margin-top: 10px; padding: 10px 11px; border-radius: 13px; background: rgba(255,255,255,.025); }
+    .data-item { min-width: 0; display: grid; gap: 3px; }
+    .data-item small { color: var(--muted); font-size: .58rem; }
+    .data-item strong { overflow: hidden; color: #d7e2f2; font-size: .66rem; text-overflow: ellipsis; white-space: nowrap; }
+    .refresh-data { width: 34px; height: 34px; padding: 0; border: 1px solid var(--line); border-radius: 11px; background: rgba(255,255,255,.04); cursor: pointer; }
+    .score-line { display: flex; align-items: flex-end; gap: 12px; margin: 22px 0; }
+    .score { font-size: 4.6rem; line-height: .86; letter-spacing: -.07em; font-weight: 850; background: linear-gradient(140deg, #ffd166, #ff7a50 45%, #ec4b9a); -webkit-background-clip: text; color: transparent; }
+    .score-line span { color: #b9c6dc; margin-bottom: 4px; font-size: .82rem; }
+    .facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+    .fact { min-width: 0; overflow: hidden; padding: 12px; border: 1px solid rgba(190,210,241,.12); border-radius: 15px; background: rgba(255,255,255,.025); }
+    .fact small { display: block; color: var(--muted); margin-bottom: 5px; }
+    .fact strong { display: block; overflow-wrap: anywhere; font-size: .88rem; }
+    .sheet-note { margin: 16px 0 0; color: #aebbd1; line-height: 1.65; font-size: .82rem; }
+    .burn-level { display: inline-flex; margin-top: 8px; padding: 6px 10px; border: 1px solid rgba(255,137,112,.28); border-radius: 999px; background: rgba(174,0,38,.13); color: #ffc0b2; font-size: .76rem; font-weight: 700; }
+    .three-day-title { display: flex; justify-content: space-between; align-items: center; margin: 20px 0 10px; }
+    .three-day-title h3 { margin: 0; font-size: .95rem; }
+    .three-day-title span { color: var(--muted); font-size: .7rem; }
+    .three-day-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 9px; }
+    .day-card { min-width: 0; overflow: hidden; padding: 12px 10px; border: 1px solid rgba(190,210,241,.12); border-radius: 15px; background: rgba(255,255,255,.025); }
+    .day-card small { display: block; color: var(--muted); margin-bottom: 8px; }
+    .day-glow-row { display: grid; grid-template-columns: auto 1fr; align-items: baseline; gap: 4px 6px; padding: 6px 0; }
+    .day-glow-row + .day-glow-row { border-top: 1px solid rgba(190,210,241,.09); }
+    .day-glow-row span { color: #c5d1e5; font-size: .7rem; }
+    .day-glow-row strong { justify-self: end; font-size: 1rem; }
+    .day-glow-row em { grid-column: 1 / -1; color: #d8e0ee; font-size: .63rem; font-style: normal; }
+    .observation-card { margin-top: 15px; padding: 12px; border: 1px solid rgba(190,210,241,.13); border-radius: 15px; background: rgba(255,255,255,.025); }
+    .observation-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .observation-head strong { font-size: .82rem; }
+    .observation-head span { color: var(--muted); font-size: .62rem; }
+    .observation-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 9px; }
+    .observation-actions button { padding: 9px; border: 1px solid var(--line); border-radius: 11px; background: rgba(255,255,255,.035); cursor: pointer; font-size: .72rem; }
+    .observation-actions button:first-child { border-color: rgba(255,120,93,.32); color: #ffb39e; }
+    .observation-state { margin: 8px 0 0; color: #aebbd1; font-size: .66rem; }
+    .data-state { color: #8fa0bd; font-size: .68rem; }
+    .search-box { width: min(520px, 100%); overflow: hidden; border: 1px solid var(--line); border-radius: 22px; background: #09162e; box-shadow: 0 28px 80px rgba(0,0,0,.55); }
+    .search-input-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; padding: 15px 17px; border-bottom: 1px solid var(--line); }
+    .search-input { min-width: 0; border: 0; outline: 0; background: transparent; color: white; }
+    .search-results { padding: 8px; max-height: 360px; overflow: auto; }
+    .result { width: 100%; display: flex; justify-content: space-between; padding: 13px; border: 0; border-radius: 13px; background: transparent; text-align: left; cursor: pointer; }
+    .result:hover { background: rgba(255,255,255,.06); }
+    .result span { color: #ffb071; font-weight: 800; }
+    .toast { position: fixed; z-index: 130; left: 50%; bottom: 26px; transform: translate(-50%, 20px); opacity: 0; pointer-events: none; padding: 11px 16px; border: 1px solid var(--line); border-radius: 13px; background: #101d36; box-shadow: 0 14px 40px rgba(0,0,0,.38); transition: .2s ease; white-space: nowrap; }
+    .toast.show { transform: translate(-50%, 0); opacity: 1; }
+
+    /* Liquid Glass is reserved for floating controls and navigation. */
+    .search-trigger, .round-button, .tabs, .layer-chip, .control-stack, .locate,
+    .legend, .timeline, .play, .scene-caption, .scene-status, .search-box, .toast,
+    .close, .refresh-data {
+      border-color: var(--glass-edge);
+      background:
+        linear-gradient(135deg, rgba(255,255,255,.24), rgba(255,255,255,.085) 36%, rgba(255,255,255,.025) 66%),
+        linear-gradient(180deg, rgba(38,75,116,.60), var(--glass-fill));
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.30),
+        inset 0 -1px 0 rgba(255,255,255,.045),
+        0 12px 34px var(--glass-shadow);
+      -webkit-backdrop-filter: blur(24px) saturate(1.55) brightness(1.06);
+      backdrop-filter: blur(24px) saturate(1.55) brightness(1.06);
+    }
+    .search-trigger, .round-button, .tab, .layer-chip, .control-stack button, .locate, .play, .close, .refresh-data, .observation-actions button {
+      transition: transform .18s ease, background-color .18s ease, border-color .18s ease, box-shadow .18s ease;
+    }
+    .search-trigger:hover, .round-button:hover, .layer-chip:hover, .locate:hover, .play:hover, .close:hover, .refresh-data:hover {
+      border-color: rgba(255,255,255,.40);
+      box-shadow: inset 0 1px rgba(255,255,255,.38), 0 14px 36px rgba(0,0,0,.31);
+    }
+    .search-trigger:active, .round-button:active, .tab:active, .layer-chip:active, .control-stack button:active, .locate:active, .play:active, .close:active, .refresh-data:active, .observation-actions button:active { transform: scale(.965); }
+    .tabs { padding: 5px; border-radius: 20px; }
+    .tab { border-radius: 15px; color: rgba(238,244,255,.72); }
+    .tab.active { color: #fff; }
+    .layer-chip.active { border-color: rgba(255,255,255,.38); background: linear-gradient(145deg,rgba(100,185,224,.35),rgba(20,54,86,.55)); }
+    .map-city-label {
+      border-color: rgba(255,255,255,.22);
+      background: linear-gradient(145deg,rgba(255,255,255,.14),rgba(4,15,34,.58));
+      box-shadow: inset 0 1px rgba(255,255,255,.24), 0 8px 20px rgba(0,0,0,.28);
+      -webkit-backdrop-filter: blur(16px) saturate(1.4);
+      backdrop-filter: blur(16px) saturate(1.4);
+    }
+    .legend { width: 43%; padding: 8px 10px; opacity: .92; }
+    .legend-title { margin-bottom: 6px; }
+    .legend-bar { height: 6px; }
+    .timeline { padding: 11px 12px 9px; border-radius: 20px; }
+    .play { box-shadow: inset 0 1px rgba(255,255,255,.28), 0 7px 20px rgba(0,0,0,.25); }
+
+    /* Content uses quieter standard material so the map remains dominant. */
+    .shade { background: rgba(7,18,35,.72); }
+    .sheet {
+      border-color: rgba(255,255,255,.23);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.075), transparent 20%),
+        rgba(17,39,69,.88);
+      box-shadow: inset 0 1px rgba(255,255,255,.22), 0 -28px 74px rgba(0,0,0,.34);
+      -webkit-backdrop-filter: blur(28px) saturate(1.22);
+      backdrop-filter: blur(28px) saturate(1.22);
+    }
+    .weather-card {
+      border-color: transparent;
+      background: linear-gradient(135deg,rgba(82,145,205,.22),rgba(255,255,255,.065));
+      box-shadow: inset 0 1px rgba(255,255,255,.14);
+    }
+    .glow-card { border-color: transparent; box-shadow: inset 0 1px rgba(255,255,255,.12); }
+    .glow-card.sunrise { background: linear-gradient(145deg,rgba(255,166,91,.17),rgba(255,255,255,.052)); }
+    .glow-card.sunset { background: linear-gradient(145deg,rgba(228,49,84,.18),rgba(255,255,255,.052)); }
+    .data-strip {
+      padding: 10px 4px;
+      border-top: 1px solid rgba(255,255,255,.08);
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      border-radius: 0;
+      background: transparent;
+    }
+    .data-item { padding: 0 7px; }
+    .data-item + .data-item { border-left: 1px solid rgba(255,255,255,.07); }
+    .day-card, .observation-card {
+      border-color: transparent;
+      background: rgba(255,255,255,.055);
+      box-shadow: inset 0 1px rgba(255,255,255,.10);
+    }
+    .observation-actions button { border-color: rgba(255,255,255,.11); background: rgba(255,255,255,.045); }
+    .search-box { border-radius: 26px; }
+    .result { border-radius: 15px; }
+    .toast { border-radius: 999px; }
+    @keyframes glassShimmer { from { background-position: 180% 0; } to { background-position: -80% 0; } }
+    .sheet.loading-weather #weatherCondition, .sheet.loading-weather #weatherMeta, .sheet.loading-weather #weatherTemp,
+    .sheet.loading-weather #weatherHumidity, .sheet.loading-weather #weatherWind,
+    .sheet.loading-glow .glow-probability strong, .sheet.loading-glow .level-chip {
+      color: transparent !important;
+      border-color: transparent !important;
+      border-radius: 8px;
+      background: linear-gradient(100deg,rgba(255,255,255,.055) 20%,rgba(255,255,255,.16) 42%,rgba(255,255,255,.055) 64%) 0 0 / 240% 100%;
+      animation: glassShimmer 1.25s linear infinite;
+    }
+    .sheet.loading-weather #weatherCondition { width: 74px; }
+    .sheet.loading-weather #weatherMeta { width: 142px; }
+    .sheet.loading-weather #weatherTemp { width: 60px; }
+    .sheet.loading-weather #weatherHumidity, .sheet.loading-weather #weatherWind { display: inline-block; width: 45px; }
+    @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+      .search-trigger, .round-button, .tabs, .layer-chip, .control-stack, .locate, .legend, .timeline, .play, .scene-caption, .scene-status, .search-box, .toast, .close, .refresh-data { background: rgba(12,27,52,.94); }
+      .sheet { background: #08142b; }
+    }
+    @media (prefers-contrast: more) {
+      .search-trigger, .round-button, .tabs, .layer-chip, .control-stack, .locate, .legend, .timeline, .play, .scene-caption, .scene-status, .search-box, .toast, .close, .refresh-data { border-color: rgba(255,255,255,.48); background: rgba(8,22,44,.92); }
+    }
+    @media (min-width: 780px) { .map-shell { margin: 20px 0; border: 1px solid rgba(190,210,241,.2); border-radius: 28px; } .map-shell::before { content:""; position:absolute; inset:0; z-index:20; pointer-events:none; border-radius:inherit; box-shadow: inset 0 0 0 1px rgba(255,255,255,.025); } }
+    @media (max-width: 520px) { .topbar { left: 4.5%; right: 4.5%; grid-template-columns: auto minmax(95px,1fr) auto; gap: 8px; } .brand { gap: 4px; } .demo-badge { display: none; } .tabs { left: 4.5%; right: 4.5%; } .tab { font-size: .7rem; gap: 3px; } .tab svg { width: 15px; } .layer-chip { top: 18.2%; } .city-scene { height: 30dvh; } .sheet { height: 72dvh; padding-left: 14px; padding-right: 14px; } .sheet.expanded { height: calc(100dvh - 42px); } .glow-card { padding: 11px 9px; } .glow-card-head { align-items: flex-start; flex-direction: column; } .glow-probability { flex-wrap: wrap; gap: 4px; } .glow-probability strong { font-size: 1.8rem; } .glow-probability span { flex-basis: 100%; } .weather-stats { gap: 10px; } .data-strip { grid-template-columns: repeat(2,minmax(0,1fr)) auto; } .refresh-data { grid-row: 1 / 3; grid-column: 3; } .scene-caption { left: 12px; } .scene-status { right: 12px; } .world-map .leaflet-control-attribution { margin-bottom: 98px !important; } }
+    /* Responsive light-glass layout: desktop, tablet and phone share one fluid scale. */
+    :root {
+      --glass-bright: linear-gradient(145deg, rgba(255,253,248,.88), rgba(241,233,222,.72));
+      --glass-soft: linear-gradient(145deg, rgba(255,252,246,.76), rgba(235,225,212,.62));
+      --glass-line: rgba(255,255,255,.88);
+      --glass-shadow: 0 16px 38px rgba(70,57,43,.14), inset 0 1px 0 rgba(255,255,255,.96);
+    }
+    html, body { width: 100%; min-height: 100%; }
+    body {
+      background:
+        radial-gradient(circle at 18% 5%, rgba(255,255,255,.98), transparent 36%),
+        radial-gradient(circle at 82% 12%, rgba(246,211,194,.34), transparent 30%),
+        linear-gradient(160deg, #faf7f2 0%, #eee8df 52%, #e6ddd2 100%);
+    }
+    .page {
+      width: 100%;
+      min-height: 100dvh;
+      display: grid;
+      place-items: center;
+      padding: clamp(0px, 2vw, 24px);
+      box-sizing: border-box;
+    }
+    .map-shell {
+      width: min(100%, 1680px);
+      max-width: none;
+      height: calc(100dvh - clamp(0px, 4vw, 48px));
+      min-height: 640px;
+      max-height: 1050px;
+      margin: 0;
+      border: 1px solid rgba(255,255,255,.88);
+      border-radius: clamp(24px, 2.3vw, 38px);
+      box-shadow: 0 28px 72px rgba(64,51,38,.18), inset 0 1px 0 rgba(255,255,255,.82);
+      overflow: hidden;
+    }
+    .map-shell::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 19;
+      pointer-events: none;
+      border-radius: inherit;
+      background: linear-gradient(140deg, rgba(255,255,255,.18), transparent 34%, rgba(255,207,184,.06));
+      box-shadow: inset 0 0 70px rgba(255,255,255,.075);
+    }
+    .world-map .leaflet-tile-pane {
+      filter: brightness(1.48) saturate(.42) contrast(.90);
+    }
+    .map-layer, .world-map { background: #efe9e1; }
+    .topbar {
+      top: clamp(16px, 2.6vh, 28px);
+      left: clamp(18px, 2.7vw, 40px);
+      right: clamp(18px, 2.7vw, 40px);
+      grid-template-columns: auto minmax(220px, 1fr) auto;
+      gap: clamp(10px, 1.5vw, 18px);
+    }
+    .brand h1 { font-size: clamp(1.45rem, 2.1vw, 2rem); text-shadow: 0 2px 16px rgba(0,28,58,.34); }
+    .search-trigger, .round-button, .tabs, .layer-chip, .legend, .timeline,
+    .control-stack, .map-controls .locate, .search-box {
+      background: var(--glass-bright);
+      border-color: var(--glass-line);
+      box-shadow: var(--glass-shadow);
+      color: #3d352e;
+      backdrop-filter: blur(22px) saturate(118%);
+      -webkit-backdrop-filter: blur(22px) saturate(118%);
+    }
+    .search-trigger { height: clamp(46px, 5.8vh, 58px); color: rgba(61,53,46,.78); }
+    .round-button { width: clamp(46px, 5.8vh, 58px); height: clamp(46px, 5.8vh, 58px); }
+    .tabs {
+      top: clamp(82px, 10.8vh, 112px);
+      left: 50%;
+      right: auto;
+      width: min(760px, calc(100% - 64px));
+      height: clamp(54px, 6.6vh, 66px);
+      transform: translateX(-50%);
+      padding: 5px;
+    }
+    .tab { color: rgba(61,53,46,.72); }
+    .tab.active { color: #fff; box-shadow: 0 10px 24px rgba(242,66,113,.24), inset 0 1px 0 rgba(255,255,255,.30); }
+    .layer-chip { top: clamp(145px, 18.5vh, 190px); right: clamp(18px, 2.7vw, 40px); }
+    .legend { left: clamp(18px, 2.7vw, 40px); bottom: clamp(108px, 13vh, 138px); width: min(310px, 34vw); }
+    .timeline { left: clamp(18px, 2.3vw, 32px); right: clamp(18px, 2.3vw, 32px); bottom: clamp(16px, 2.2vh, 26px); }
+    .map-controls { right: clamp(18px, 2.7vw, 40px); bottom: clamp(164px, 20vh, 208px); }
+    .control-stack button, .map-controls .locate { color: #3d352e; }
+    .sheet {
+      background: linear-gradient(155deg, rgba(255,253,248,.98), rgba(239,232,222,.97));
+      border-color: rgba(255,255,255,.90);
+      color: #3d352e;
+      box-shadow: 0 -18px 50px rgba(67,54,42,.15), inset 0 1px 0 rgba(255,255,255,.96);
+    }
+    .weather-card, .glow-card, .day-card, .observation-card, .data-strip {
+      background: linear-gradient(145deg, rgba(255,255,252,.80), rgba(235,226,214,.60));
+      border-color: rgba(255,255,255,.88);
+      box-shadow: 0 10px 26px rgba(72,58,44,.08), inset 0 1px 0 rgba(255,255,255,.92);
+    }
+    .legend, .timeline, .legend-title, .time-value { color: #3d352e; }
+    .legend-labels, .time-labels { color: rgba(61,53,46,.58); }
+    .sheet h2, .sheet h3, .weather-copy strong, .weather-temp,
+    .glow-card strong, .day-card strong, .data-item strong, .observation-card strong { color: #3d352e; }
+
+    @media (min-width: 1024px) {
+      .topbar { grid-template-columns: auto minmax(360px, 620px) 58px; }
+      .map-shell { min-height: 680px; }
+      .legend { padding: 13px 16px; }
+      .timeline { padding: 13px 16px; }
+    }
+    @media (min-width: 641px) and (max-width: 1023px) {
+      .page { padding: 12px; }
+      .map-shell { height: calc(100dvh - 24px); min-height: 620px; border-radius: 28px; }
+      .tabs { width: min(680px, calc(100% - 48px)); }
+      .legend { width: min(292px, 38vw); }
+    }
+    @media (max-width: 640px) {
+      .page { display: block; padding: 0; }
+      .map-shell { width: 100%; height: 100dvh; min-height: 0; max-height: none; border: 0; border-radius: 0; }
+      .topbar {
+        top: max(12px, env(safe-area-inset-top));
+        left: 12px;
+        right: 12px;
+        grid-template-columns: auto minmax(0, 1fr) 44px;
+        gap: 8px;
+      }
+      .brand h1 { font-size: clamp(1.22rem, 5.6vw, 1.52rem); }
+      .search-trigger { min-width: 0; height: 44px; padding: 0 12px; font-size: .82rem; }
+      .round-button { width: 44px; height: 44px; }
+      .tabs { top: max(70px, calc(env(safe-area-inset-top) + 58px)); left: 12px; right: 12px; width: auto; height: 52px; transform: none; }
+      .tab { font-size: .76rem; }
+      .layer-chip { top: max(130px, calc(env(safe-area-inset-top) + 118px)); right: 12px; }
+      .legend { left: 12px; bottom: calc(102px + env(safe-area-inset-bottom)); width: min(268px, calc(100% - 94px)); padding: 10px 12px; }
+      .timeline { left: 12px; right: 12px; bottom: calc(10px + env(safe-area-inset-bottom)); padding: 10px 12px; }
+      .map-controls { right: 12px; bottom: calc(166px + env(safe-area-inset-bottom)); }
+      .time-value { font-size: .72rem; }
+      .time-labels { font-size: .62rem; }
+      .play { width: 46px; height: 46px; flex: 0 0 46px; }
+      .sheet { border-radius: 24px 24px 0 0; }
+    }
+    @media (max-height: 700px) and (max-width: 640px) {
+      .topbar { top: 8px; }
+      .tabs { top: 60px; height: 48px; }
+      .layer-chip { top: 114px; }
+      .legend { bottom: 88px; padding: 8px 10px; }
+      .timeline { bottom: 7px; padding: 8px 10px; }
+      .map-controls { bottom: 148px; }
+      .time-labels { display: none; }
+    }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="map-shell" aria-label="世界霞光概率地图">
+      <div class="map-layer" id="mapLayer">
+        <div class="world-map" id="worldMap" aria-label="可拖动缩放的世界地图"></div>
+        <span class="map-status" id="mapStatus">正在加载世界地图</span>
+      </div>
+      <header class="topbar">
+        <div class="brand"><h1>霞光地图</h1><span class="demo-badge">模型估算</span></div>
+        <button class="search-trigger" id="openSearch" aria-label="搜索全球城市和乡镇"><span aria-hidden="true">⌕</span><span>搜索全球城市、乡镇</span></button>
+        <button class="round-button" id="locateTop" aria-label="定位">⌖</button>
+      </header>
+      <nav class="tabs" aria-label="霞光预测模式">
+        <button class="tab" id="sunriseTab" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 16h16M7 16a5 5 0 0 1 10 0M12 5v4M5 9l2 2M19 9l-2 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>朝霞</button>
+        <button class="tab active" id="sunsetTab" aria-pressed="true"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 15h16M7 15a5 5 0 0 1 10 0M12 4v3M5 8l2 2M19 8l-2 2M12 19v-2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>晚霞</button>
+        <button class="tab" id="trendTab"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m4 16 5-5 4 3 7-8M16 6h4v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>未来3天</button>
+      </nav>
+      <button class="layer-chip" id="satelliteToggle" aria-pressed="false" aria-label="切换云图示意层">☁ 云图 <small>示意</small></button>
+      <div class="map-controls"><div class="control-stack"><button id="zoomIn" aria-label="放大地图">＋</button><button id="zoomOut" aria-label="缩小地图">−</button></div><button class="locate" id="locateMap" aria-label="定位当前位置">➤</button></div>
+      <div class="legend"><div class="legend-title"><span>霞光强度 · 九级</span><span id="legendMode">晚霞</span></div><div class="legend-bar"></div><div class="legend-labels"><span>不烧</span><span>小烧</span><span>中烧</span><span>大烧</span><span>特大烧</span></div></div>
+      <div class="timeline"><div class="timeline-row"><div class="range-wrap"><div class="time-value"><span id="trendLabel">今日晚霞趋势</span><span id="timeValue">18:00 · 76%</span></div><input id="timeRange" type="range" min="0" max="5" step="1" value="3" aria-label="选择预测时间"><div class="time-labels" id="timeLabels"><span>15:00</span><span>16:00</span><span>17:00</span><span>18:00</span><span>19:00</span><span>20:00</span></div></div><button class="play" id="playButton" aria-label="播放时间变化">▶</button></div></div>
+    </section>
+  </main>
+  <div class="shade" id="detailShade" role="dialog" aria-modal="true" aria-labelledby="detailTitle"><div class="city-scene" id="cityScene"><img class="city-scene-photo" id="citySceneImage" src="assets/city-scenes/guangzhou-sunset.jpg" alt="广州塔珠江新城晚霞氛围图"><div class="scene-caption"><strong id="citySceneTitle">广州 · 广州塔珠江新城</strong><span id="citySceneType">专属城市晚霞</span></div><span class="scene-status">晚霞氛围图</span></div><section class="sheet" id="detailSheet"><button class="sheet-grabber" id="sheetToggle" aria-label="展开或收起详情" aria-expanded="false"></button><div class="sheet-head"><div><p class="eyebrow" id="detailRegion">广东 · 广州</p><h2 id="detailTitle">广州天气与霞光</h2></div><button class="close" id="closeDetail" aria-label="关闭详情">×</button></div><div class="weather-card"><div class="weather-main"><div class="weather-primary"><span class="weather-icon" id="weatherIcon">◌</span><div class="weather-copy"><strong id="weatherCondition">天气待更新</strong><span id="weatherMeta">体感 --° · 今日 --° / --°</span></div></div><strong class="weather-temp" id="weatherTemp">--°</strong></div><div class="weather-stats"><span>湿度<b id="weatherHumidity">--</b></span><span>风速<b id="weatherWind">--</b></span></div></div><h3 class="section-label">今日朝霞 / 晚霞</h3><div class="glow-cards"><article class="glow-card sunrise"><div class="glow-card-head"><strong>☀ 朝霞</strong><span class="level-chip" id="sunriseLevel">待计算</span></div><div class="glow-probability"><strong id="sunriseScore">--%</strong><span>出现概率</span></div><div class="intensity-row"><span>霞光强度</span><span class="intensity-track"><i id="sunriseIntensityBar"></i></span><b id="sunriseIntensity">--</b></div><div class="glow-time"><span>最佳时段</span><b id="sunriseTime">日出前后约20分钟</b></div></article><article class="glow-card sunset"><div class="glow-card-head"><strong>◒ 晚霞</strong><span class="level-chip" id="sunsetLevel">待计算</span></div><div class="glow-probability"><strong id="sunsetScore">--%</strong><span>出现概率</span></div><div class="intensity-row"><span>霞光强度</span><span class="intensity-track"><i id="sunsetIntensityBar"></i></span><b id="sunsetIntensity">--</b></div><div class="glow-time"><span>最佳时段</span><b id="sunsetTime">日落前后约20分钟</b></div></article></div><div class="data-strip"><span class="data-item"><small>状态</small><strong id="dataState">正在读取</strong></span><span class="data-item"><small>更新时间</small><strong id="dataUpdated">--</strong></span><span class="data-item"><small>来源</small><strong id="dataSource">--</strong></span><span class="data-item"><small>置信度</small><strong id="dataConfidence">--</strong></span><button class="refresh-data" id="refreshData" aria-label="刷新当前城市数据">↻</button></div><div class="three-day-title" id="futureSection"><h3>未来三天趋势</h3><span id="trendState">正在读取云层数据</span></div><div class="three-day-grid" id="threeDayGrid"></div><div class="observation-card"><div class="observation-head"><strong>现场实况</strong><span>本机记录，不会上传</span></div><div class="observation-actions"><button id="observedGlow">已见霞光</button><button id="observedNone">暂未出现</button></div><p class="observation-state" id="observationState">尚未记录当前城市实况</p></div><p class="sheet-note">出现概率表示“是否可能出现”；霞光强度依据中高云着色条件、低云遮挡、能见度和降水单独估算。模型结果不等同于现场目击。</p></section></div>
+  <div class="search-shade" id="searchShade" role="dialog" aria-modal="true" aria-label="搜索地区"><div class="search-box"><div class="search-input-row"><span>⌕</span><input class="search-input" id="searchInput" placeholder="搜索全球城市、区县、乡镇" autocomplete="off"><button class="close" id="closeSearch" aria-label="关闭搜索">×</button></div><div class="search-results" id="searchResults"></div></div></div>
+  <div class="toast" id="toast" role="status"></div>
+  <script src="vendor/leaflet/leaflet.js"></script><script src="data/china-provinces.js"></script><script src="app.js?v=20261012-publish-v10"></script>
+</body>
+</html>
